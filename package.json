@@ -1,0 +1,49 @@
+{
+  "name": "ats-cv-builder-frontend",
+  "version": "1.0.0",
+  "description": "Frontend assets and build configuration for ATS CV Builder",
+  "main": "app/static/js/app.js",
+  "scripts": {
+    "build": "echo 'No build process required for vanilla JS'",
+    "dev": "echo 'Use Python development server for frontend development'",
+    "lint": "echo 'Add linting tools as needed'",
+    "format": "prettier --write app/static/**/*.{js,css,json,html}",
+    "preview": "echo 'Open http://localhost:8000 to preview the application'"
+  },
+  "keywords": [
+    "cv-builder",
+    "ats",
+    "resume",
+    "fastapi",
+    "vanilla-js",
+    "tailwindcss"
+  ],
+  "author": "ATS CV Builder Team",
+  "license": "MIT",
+  "devDependencies": {
+    "prettier": "^3.0.0"
+  },
+  "dependencies": {
+    "tailwindcss": "^3.3.0"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/ats-cv-builder.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/ats-cv-builder/issues"
+  },
+  "homepage": "https://github.com/your-org/ats-cv-builder#readme",
+  "browserslist": [
+    "defaults",
+    "not IE 11",
+    "not op_mini all"
+  ],
+  "files": [
+    "app/static/**/*"
+  ]
+}

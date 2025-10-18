@@ -1,0 +1,179 @@
+version: '3.8'
+
+# Development-specific overrides for local development
+# This file is automatically merged with docker-compose.yml when running docker-compose
+
+services:
+  # API Gateway - Development configuration
+  api-gateway:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+      - HOT_RELOAD=true
+    volumes:
+      - ./app:/app/app
+      - ./app/static:/app/app/static
+      - ./app/templates:/app/app/templates
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+
+  # AI Kernel - Development configuration
+  ai-kernel:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/ai-kernel-service:/app
+    ports:
+      - "8001:8001"
+      - "50051:50051"
+
+  # Identity Service - Development configuration
+  identity:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/identity-service:/app
+    ports:
+      - "8002:8002"
+      - "50052:50052"
+
+  # CV Engine Service - Development configuration
+  cv-engine:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/cv-engine-service:/app
+    ports:
+      - "8003:8003"
+      - "50053:50053"
+
+  # Conversational Service - Development configuration
+  conversational:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/conversational-service:/app
+    ports:
+      - "8004:8004"
+      - "50054:50054"
+
+  # Analytics Service - Development configuration
+  analytics:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/analytics-service:/app
+    ports:
+      - "8005:8005"
+      - "50055:50055"
+
+  # Automation Service - Development configuration
+  automation:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/automation-service:/app
+    ports:
+      - "8006:8006"
+      - "50056:50056"
+
+  # Vision Service - Development configuration
+  vision:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/vision-service:/app
+    ports:
+      - "8007:8007"
+      - "50057:50057"
+
+  # Plugin Service - Development configuration
+  plugin:
+    build:
+      target: development
+    environment:
+      - BUILD_TARGET=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./services/plugin-service:/app
+      - plugin-dev-data:/app/plugins
+    ports:
+      - "8008:8008"
+      - "50058:50058"
+
+  # Development database for local testing
+  postgres-dev:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ai_fusion_core_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    networks:
+      - ai-fusion-network
+    profiles:
+      - development
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for development (single instance)
+  redis-dev:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-dev-data:/data
+    networks:
+      - ai-fusion-network
+    command: redis-server --appendonly yes
+    profiles:
+      - development
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  postgres-dev-data:
+  redis-dev-data:
+  plugin-dev-data:

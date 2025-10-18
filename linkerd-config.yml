@@ -1,0 +1,220 @@
+# Linkerd configuration for AI Fusion Core microservices
+# This configuration enables mTLS, observability, and traffic management
+
+# Global configuration
+global:
+  # Enable mTLS for all services
+  tls:
+    enabled: true
+
+  # Prometheus metrics configuration
+  prometheus:
+    enabled: true
+
+  # Grafana dashboard configuration
+  grafana:
+    enabled: true
+
+  # Jaeger tracing configuration
+  jaeger:
+    enabled: true
+
+# Service profiles for better observability
+profiles:
+  - name: ai-kernel-service
+    routes:
+      - name: grpc-route
+        condition:
+          method: POST
+          path: "/ai_kernel.AIKernel/*"
+        responseClasses:
+          - condition:
+              status:
+                min: 100
+                max: 199
+            class: "1xx"
+          - condition:
+              status:
+                min: 200
+                max: 299
+            class: "2xx"
+          - condition:
+              status:
+                min: 300
+                max: 399
+            class: "3xx"
+          - condition:
+              status:
+                min: 400
+                max: 499
+            class: "4xx"
+          - condition:
+              status:
+                min: 500
+                max: 599
+            class: "5xx"
+
+  - name: identity-service
+    routes:
+      - name: grpc-route
+        condition:
+          method: POST
+          path: "/identity.IdentityService/*"
+        responseClasses:
+          - condition:
+              status:
+                min: 100
+                max: 199
+            class: "1xx"
+          - condition:
+              status:
+                min: 200
+                max: 299
+            class: "2xx"
+          - condition:
+              status:
+                min: 300
+                max: 399
+            class: "3xx"
+          - condition:
+              status:
+                min: 400
+                max: 499
+            class: "4xx"
+          - condition:
+              status:
+                min: 500
+                max: 599
+            class: "5xx"
+
+  - name: cv-engine-service
+    routes:
+      - name: grpc-route
+        condition:
+          method: POST
+          path: "/cv_engine.CVEngine/*"
+        responseClasses:
+          - condition:
+              status:
+                min: 100
+                max: 199
+            class: "1xx"
+          - condition:
+              status:
+                min: 200
+                max: 299
+            class: "2xx"
+          - condition:
+              status:
+                min: 300
+                max: 399
+            class: "3xx"
+          - condition:
+              status:
+                min: 400
+                max: 499
+            class: "4xx"
+          - condition:
+              status:
+                min: 500
+                max: 599
+            class: "5xx"
+
+# Traffic policies for service-to-service communication
+trafficPolicies:
+  - name: ai-kernel-policy
+    selector:
+      matchLabels:
+        app: ai-kernel
+    policy:
+      traffic:
+        - destination:
+            selector:
+              matchLabels:
+                app: identity
+          policy:
+            tls:
+              mode: SIMPLE
+            retries:
+              attempts: 3
+              perTryTimeout: 2s
+
+  - name: identity-policy
+    selector:
+      matchLabels:
+        app: identity
+    policy:
+      traffic:
+        - destination:
+            selector:
+              matchLabels:
+                app: ai-kernel
+          policy:
+            tls:
+              mode: SIMPLE
+            retries:
+              attempts: 3
+              perTryTimeout: 2s
+
+  - name: cv-engine-policy
+    selector:
+      matchLabels:
+        app: cv-engine
+    policy:
+      traffic:
+        - destination:
+            selector:
+              matchLabels:
+                app: ai-kernel
+          policy:
+            tls:
+              mode: SIMPLE
+            retries:
+              attempts: 3
+              perTryTimeout: 2s
+
+# Circuit breaker policies for fault tolerance
+circuitBreakers:
+  - name: ai-kernel-cb
+    selector:
+      matchLabels:
+        app: ai-kernel
+    policy:
+      maxConnections: 100
+      maxRequests: 1000
+      maxPendingRequests: 100
+      maxRetries: 3
+
+  - name: identity-cb
+    selector:
+      matchLabels:
+        app: identity
+    policy:
+      maxConnections: 50
+      maxRequests: 500
+      maxPendingRequests: 50
+      maxRetries: 3
+
+# Rate limiting for API protection
+rateLimits:
+  - name: api-gateway-rl
+    selector:
+      matchLabels:
+        app: api-gateway
+    policy:
+      requestsPerSecond: 100
+      burstSize: 50
+
+# Timeout policies
+timeouts:
+  - name: grpc-timeouts
+    selector:
+      matchLabels:
+        app: ai-kernel
+    policy:
+      grpc:
+        server:
+          maxRequestTime: 30s
+        stream:
+          idleTimeout: 5m
+          pingInterval: 30s

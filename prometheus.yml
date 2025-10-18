@@ -1,0 +1,134 @@
+# Prometheus configuration for AI Fusion Core service mesh monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Linkerd control plane metrics
+  - job_name: 'linkerd-controller'
+    static_configs:
+      - targets: ['linkerd-controller:9995']
+    scrape_interval: 10s
+
+  # Linkerd proxy metrics
+  - job_name: 'linkerd-proxy'
+    static_configs:
+      - targets: ['api-gateway:4191', 'ai-kernel:4191', 'identity:4191', 'cv-engine:4191']
+    scrape_interval: 10s
+
+  # Application-specific metrics
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'ai-kernel-service'
+    static_configs:
+      - targets: ['ai-kernel:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'identity-service'
+    static_configs:
+      - targets: ['identity:8002']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'cv-engine-service'
+    static_configs:
+      - targets: ['cv-engine:8003']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'conversational-service'
+    static_configs:
+      - targets: ['conversational:8004']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics:8005']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'automation-service'
+    static_configs:
+      - targets: ['automation:8006']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'vision-service'
+    static_configs:
+      - targets: ['vision:8007']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'plugin-service'
+    static_configs:
+      - targets: ['plugin:8008']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Database cluster exporters
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+
+  - job_name: 'mongodb-exporter'
+    static_configs:
+      - targets: ['mongodb-exporter:9216']
+    scrape_interval: 30s
+
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+
+  # Legacy database services (for backward compatibility)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres01:5432', 'postgres02:5432', 'postgres03:5432']
+    scrape_interval: 60s
+
+  - job_name: 'redis-cluster'
+    static_configs:
+      - targets: ['redis01:6379', 'redis02:6379', 'redis03:6379', 'redis04:6379', 'redis05:6379', 'redis06:6379']
+    scrape_interval: 60s
+
+  - job_name: 'mongodb'
+    static_configs:
+      - targets: ['mongodb01:27017', 'mongodb02:27017', 'mongodb03:27017', 'mongodb-router:27017']
+    scrape_interval: 60s
+
+  - job_name: 'vector-db'
+    static_configs:
+      - targets: ['vector-db:6333']
+    scrape_interval: 60s
+
+  # Jaeger metrics (if available)
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']
+    scrape_interval: 60s
+
+alerting:
+ alertmanagers:
+   - static_configs:
+       - targets:
+         - alertmanager:9093
+
+rule_files:
+ - "alerts.yml"

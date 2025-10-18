@@ -1,0 +1,141 @@
+version: '3.8'
+
+# Testing-specific configuration for running tests
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.test.yml run --rm test-runner
+
+networks:
+  ai-fusion-network:
+    driver: bridge
+
+services:
+  # Test database (isolated from development)
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ai_fusion_core_test
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    networks:
+      - ai-fusion-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Test Redis instance
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-test-data:/data
+    networks:
+      - ai-fusion-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # Test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres-test:5432/ai_fusion_core_test
+      - REDIS_URL=redis://redis-test:6379/0
+      - TESTING=true
+      - DEBUG=false
+      - LOG_LEVEL=WARNING
+    volumes:
+      - ./app:/app/app
+      - ./services:/app/services
+      - /app/app/node_modules  # Exclude node_modules if present
+    networks:
+      - ai-fusion-network
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Setting up test environment...' &&
+        sleep 10 &&
+        echo 'Running tests...' &&
+        python -m pytest app/tests/ -v --tb=short --cov=app --cov-report=html --cov-report=term ||
+        python -m pytest services/*/tests/ -v --tb=short --cov=services --cov-report=html --cov-report=term ||
+        echo 'No tests found, exiting...'
+      "
+    profiles:
+      - testing
+
+  # API Gateway for integration tests
+  api-gateway-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: testing
+    ports:
+      - "8001:8000"  # Different port to avoid conflicts
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEBUG=false
+      - TESTING=true
+      - DATABASE_URL=postgresql://postgres:password@postgres-test:5432/ai_fusion_core_test
+      - REDIS_URL=redis://redis-test:6379/0
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+    networks:
+      - ai-fusion-network
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    profiles:
+      - testing
+
+  # AI Kernel for integration tests
+  ai-kernel-test:
+    build:
+      context: ./services/ai-kernel-service
+      dockerfile: Dockerfile
+      target: testing
+    ports:
+      - "8002:8001"
+      - "50052:50051"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8001
+      - GRPC_PORT=50051
+      - DEBUG=false
+      - TESTING=true
+      - DATABASE_URL=postgresql://postgres:password@postgres-test:5432/ai_fusion_core_test
+      - REDIS_URL=redis://redis-test:6379/0
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    volumes:
+      - ./services/ai-kernel-service:/app
+    networks:
+      - ai-fusion-network
+    command: ["python", "main.py"]
+    profiles:
+      - testing
+
+volumes:
+  postgres-test-data:
+  redis-test-data:

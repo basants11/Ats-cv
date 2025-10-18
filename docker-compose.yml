@@ -1,0 +1,1370 @@
+version: '3.8'
+
+networks:
+  ai-fusion-network:
+    driver: bridge
+
+# Common configurations for different environments
+x-common-service-config: &common-service-config
+  restart: unless-stopped
+  networks:
+    - ai-fusion-network
+
+x-development-config: &development-config
+  <<: *common-service-config
+  environment:
+    - DEBUG=true
+    - LOG_LEVEL=DEBUG
+    - ENVIRONMENT=development
+
+x-testing-config: &testing-config
+  <<: *common-service-config
+  environment:
+    - DEBUG=false
+    - LOG_LEVEL=WARNING
+    - TESTING=true
+    - ENVIRONMENT=testing
+
+x-production-config: &production-config
+  <<: *common-service-config
+  environment:
+    - DEBUG=false
+    - LOG_LEVEL=INFO
+    - ENVIRONMENT=production
+
+# Linkerd proxy environment variables
+x-linkerd-base-env: &linkerd-base-env
+  LINKERD2_PROXY_LOG: "warn,linkerd=info"
+  LINKERD2_PROXY_LOG_FORMAT: "plain"
+  LINKERD2_PROXY_DESTINATION_SVC_ADDR: "linkerd-destination.ai-fusion-network:8086"
+  LINKERD2_PROXY_CONTROL_LISTEN_ADDR: "0.0.0.0:4190"
+  LINKERD2_PROXY_ADMIN_LISTEN_ADDR: "0.0.0.0:4191"
+  LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR: "127.0.0.1:4140"
+  LINKERD2_PROXY_INBOUND_LISTEN_ADDR: "0.0.0.0:4143"
+  LINKERD2_PROXY_DESTINATION_GET_SUFFIXES: "svc.cluster.local."
+  LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES: "svc.cluster.local."
+  LINKERD2_PROXY_POLICY_SVC_ADDR: "linkerd-destination.ai-fusion-network:8090"
+  LINKERD2_PROXY_POLICY_WORKLOAD: "$$(_pod_ns):$$(_pod_name)"
+  LINKERD2_PROXY_INBOUND_DEFAULT_POLICY: "all-authenticated"
+  LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16"
+  LINKERD2_PROXY_IDENTITY_DIR: "/var/run/linkerd/identity/end-entity"
+  LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM: "/var/run/linkerd/identity/trust-roots/ca.crt"
+  LINKERD2_PROXY_IDENTITY_TOKEN_FILE: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+  LINKERD2_PROXY_IDENTITY_SVC_ADDR: "linkerd-identity.ai-fusion-network:8080"
+  _pod_ns: "ai-fusion-network"
+  _pod_name: "${SERVICE_NAME}"
+
+# Database connection strings for different environments
+x-database-env: &database-env
+  DATABASE_URL: "postgresql://postgres:password@pgbouncer:6432/ai_fusion_core"
+  REDIS_URL: "redis://redis-cluster:6379/0"
+
+x-database-env-testing: &database-env-testing
+  DATABASE_URL: "postgresql://postgres:password@pgbouncer:6432/ai_fusion_core_test"
+  REDIS_URL: "redis://redis-cluster:6379/1"
+
+services:
+  # Linkerd Control Plane Services
+  linkerd-controller:
+    <<: *common-service-config
+    image: gcr.io/linkerd-io/controller:stable-2.14.0
+    command:
+      - "destination"
+      - "controller"
+    ports:
+      - "8085:8085"
+      - "9995:9995"
+    environment:
+      <<: *linkerd-base-env
+      LINKERD2_PROXY_DESTINATION_SVC_ADDR: "localhost.:8086"
+      LINKERD2_PROXY_POLICY_SVC_ADDR: "localhost.:8090"
+      LINKERD2_PROXY_IDENTITY_SVC_ADDR: "localhost.:8080"
+      _pod_ns: "linkerd"
+      _pod_name: "linkerd-controller"
+      SERVICE_NAME: "linkerd-controller"
+    volumes:
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    profiles:
+      - production
+      - monitoring
+    labels:
+      app.kubernetes.io/name: controller
+      app.kubernetes.io/part-of: Linkerd
+
+  linkerd-destination:
+    image: gcr.io/linkerd-io/controller:stable-2.14.0
+    networks:
+      - ai-fusion-network
+    command:
+      - "destination"
+      - "destination"
+    ports:
+      - "8086:8086"
+      - "9996:9996"
+    environment:
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=localhost.:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=localhost.:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=localhost.:8080
+      - _pod_ns=linkerd
+      - _pod_name=linkerd-destination
+    volumes:
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: destination
+      app.kubernetes.io/part-of: Linkerd
+
+  linkerd-proxy-injector:
+    image: gcr.io/linkerd-io/controller:stable-2.14.0
+    networks:
+      - ai-fusion-network
+    command:
+      - "proxy-injector"
+    ports:
+      - "8443:8443"
+      - "9990:9990"
+    environment:
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=localhost.:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=localhost.:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=localhost.:8080
+      - _pod_ns=linkerd
+      - _pod_name=linkerd-proxy-injector
+    volumes:
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: proxy-injector
+      app.kubernetes.io/part-of: Linkerd
+
+  linkerd-identity:
+    image: gcr.io/linkerd-io/controller:stable-2.14.0
+    networks:
+      - ai-fusion-network
+    command:
+      - "identity"
+    ports:
+      - "8080:8080"
+      - "9991:9991"
+    environment:
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=localhost.:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=localhost.:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=localhost.:8080
+      - _pod_ns=linkerd
+      - _pod_name=linkerd-identity
+    volumes:
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: identity
+      app.kubernetes.io/part-of: Linkerd
+
+  # Prometheus for metrics collection
+  prometheus:
+    <<: *common-service-config
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    profiles:
+      - monitoring
+      - production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for visualization
+  grafana:
+    <<: *common-service-config
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_LOG_LEVEL=debug
+    volumes:
+      - grafana-data:/var/lib/grafana
+    profiles:
+      - monitoring
+      - production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Jaeger for distributed tracing
+  jaeger:
+    <<: *common-service-config
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - LOG_LEVEL=debug
+    profiles:
+      - monitoring
+      - production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:14268/api/traces"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # API Gateway Service
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-production}
+    ports:
+      - "${API_GATEWAY_PORT:-8000}:8000"
+    environment:
+      <<: *linkerd-base-env
+      <<: *database-env
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      SECRET_KEY: "${SECRET_KEY:-your-super-secret-key-change-this-in-production}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      PINECONE_API_KEY: "${PINECONE_API_KEY}"
+      SERVICE_NAME: "api-gateway"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis-cluster-proxy:
+        condition: service_healthy
+      linkerd-controller:
+        condition: service_started
+      linkerd-destination:
+        condition: service_started
+      linkerd-identity:
+        condition: service_started
+    volumes:
+      - ./app:/app/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    <<: *common-service-config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles:
+      - development
+      - testing
+      - production
+    labels:
+      app.kubernetes.io/name: api-gateway
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # AI Kernel Service
+  ai-kernel:
+    build:
+      context: ./services/ai-kernel-service
+      dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-production}
+    ports:
+      - "${AI_KERNEL_HTTP_PORT:-8001}:8001"
+      - "${AI_KERNEL_GRPC_PORT:-50051}:50051"
+    environment:
+      <<: *linkerd-base-env
+      <<: *database-env
+      HOST: "0.0.0.0"
+      HTTP_PORT: "8001"
+      GRPC_PORT: "50051"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      PINECONE_API_KEY: "${PINECONE_API_KEY}"
+      VECTOR_DB_TYPE: "${VECTOR_DB_TYPE:-pinecone}"
+      VECTOR_DB_URL: "${VECTOR_DB_URL:-http://vector-db:6333}"
+      SERVICE_NAME: "ai-kernel"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis-cluster-proxy:
+        condition: service_healthy
+      vector-db:
+        condition: service_healthy
+      linkerd-controller:
+        condition: service_started
+      linkerd-destination:
+        condition: service_started
+      linkerd-identity:
+        condition: service_started
+    volumes:
+      - ./services/ai-kernel-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    <<: *common-service-config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles:
+      - development
+      - testing
+      - production
+    labels:
+      app.kubernetes.io/name: ai-kernel
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Identity Service (updated for Linkerd)
+  identity:
+    build:
+      context: ./services/identity-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8002:8002"
+      - "50052:50052"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8002
+      - GRPC_PORT=50052
+      - DEBUG=false
+      - DATABASE_URL=postgresql://postgres:password@pgbouncer:6432/ai_fusion_core
+      - REDIS_URL=redis://redis-cluster:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key}
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=identity
+    depends_on:
+      - postgres
+      - redis
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/identity-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: identity
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # CV Engine Service (updated for Linkerd)
+  cv-engine:
+    build:
+      context: ./services/cv-engine-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8003:8003"
+      - "50053:50053"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8003
+      - GRPC_PORT=50053
+      - DEBUG=false
+      - DATABASE_URL=postgresql://postgres:password@pgbouncer:6432/ai_fusion_core
+      - REDIS_URL=redis://redis-cluster:6379/0
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=cv-engine
+    depends_on:
+      - postgres
+      - redis
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/cv-engine-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: cv-engine
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Conversational Service (updated for Linkerd)
+  conversational:
+    build:
+      context: ./services/conversational-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8004:8004"
+      - "50054:50054"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8004
+      - GRPC_PORT=50054
+      - DEBUG=false
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=conversational
+    depends_on:
+      - postgres
+      - redis
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/conversational-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: conversational
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Analytics Service (updated for Linkerd)
+  analytics:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8005:8005"
+      - "50055:50055"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8005
+      - GRPC_PORT=50055
+      - DEBUG=false
+      - DATABASE_URL=postgresql://postgres:password@pgbouncer:6432/ai_fusion_core
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=analytics
+    depends_on:
+      - postgres
+      - redis
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/analytics-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: analytics
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Automation Service (updated for Linkerd)
+  automation:
+    build:
+      context: ./services/automation-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8006:8006"
+      - "50056:50056"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8006
+      - GRPC_PORT=50056
+      - DEBUG=false
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=automation
+    depends_on:
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/automation-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: automation
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Vision Service (updated for Linkerd)
+  vision:
+    build:
+      context: ./services/vision-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8007:8007"
+      - "50057:50057"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8007
+      - GRPC_PORT=50057
+      - DEBUG=false
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=vision
+    depends_on:
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/vision-service:/app
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: vision
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # Plugin Service (updated for Linkerd)
+  plugin:
+    build:
+      context: ./services/plugin-service
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "8008:8008"
+      - "50058:50058"
+    environment:
+      - HOST=0.0.0.0
+      - HTTP_PORT=8008
+      - GRPC_PORT=50058
+      - DEBUG=false
+      # Linkerd proxy configuration
+      - LINKERD2_PROXY_LOG=warn,linkerd=info
+      - LINKERD2_PROXY_LOG_FORMAT=plain
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-destination.ai-fusion-network:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_GET_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_POLICY_SVC_ADDR=linkerd-destination.ai-fusion-network:8090
+      - LINKERD2_PROXY_POLICY_WORKLOAD=$(_pod_ns):$(_pod_name)
+      - LINKERD2_PROXY_INBOUND_DEFAULT_POLICY=all-authenticated
+      - LINKERD2_PROXY_POLICY_CLUSTER_NETWORKS=10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS_PEM=/var/run/linkerd/identity/trust-roots/ca.crt
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.ai-fusion-network:8080
+      - _pod_ns=ai-fusion-network
+      - _pod_name=plugin
+    depends_on:
+      - linkerd-controller
+      - linkerd-destination
+      - linkerd-identity
+    volumes:
+      - ./services/plugin-service:/app
+      - plugin-data:/app/plugins
+      - linkerd-trust-roots:/var/run/linkerd/identity/trust-roots:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    labels:
+      app.kubernetes.io/name: plugin
+      app.kubernetes.io/part-of: ai-fusion-core
+
+  # PostgreSQL Cluster with Patroni
+  postgres01:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ai_fusion_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres01-data:/var/lib/postgresql/data/pgdata
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c wal_level=hot_standby
+      -c hot_standby=on
+      -c wal_log_hints=on
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby_feedback=on
+
+  postgres02:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ai_fusion_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres02-data:/var/lib/postgresql/data/pgdata
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c wal_level=hot_standby
+      -c hot_standby=on
+      -c wal_log_hints=on
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby_feedback=on
+
+  postgres03:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ai_fusion_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres03-data:/var/lib/postgresql/data/pgdata
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c wal_level=hot_standby
+      -c hot_standby=on
+      -c wal_log_hints=on
+      -c max_wal_senders=3
+      -c max_replication_slots=3
+      -c hot_standby_feedback=on
+
+  # Patroni for PostgreSQL cluster management
+  patroni01:
+    image: patroni/patroni:latest
+    environment:
+      PATRONI_NAME: patroni01
+      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: postgres01:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni01:8008
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_ETCD_HOST: etcd:2379
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: password
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: replicate
+      PATRONI_admin_USERNAME: admin
+      PATRONI_admin_PASSWORD: admin123
+    volumes:
+      - ./postgres/patroni01.yml:/opt/patroni/patroni.yml
+      - postgres01-data:/var/lib/postgresql/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - postgres01
+      - etcd
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/leader"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  patroni02:
+    image: patroni/patroni:latest
+    environment:
+      PATRONI_NAME: patroni02
+      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: postgres02:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni02:8008
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_ETCD_HOST: etcd:2379
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: password
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: replicate
+      PATRONI_admin_USERNAME: admin
+      PATRONI_admin_PASSWORD: admin123
+    volumes:
+      - ./postgres/patroni02.yml:/opt/patroni/patroni.yml
+      - postgres02-data:/var/lib/postgresql/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - postgres02
+      - etcd
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/leader"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  patroni03:
+    image: patroni/patroni:latest
+    environment:
+      PATRONI_NAME: patroni03
+      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: postgres03:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni03:8008
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_ETCD_HOST: etcd:2379
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: password
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: replicate
+      PATRONI_admin_USERNAME: admin
+      PATRONI_admin_PASSWORD: admin123
+    volumes:
+      - ./postgres/patroni03.yml:/opt/patroni/patroni.yml
+      - postgres03-data:/var/lib/postgresql/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - postgres03
+      - etcd
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/leader"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # etcd for cluster coordination
+  etcd:
+    image: bitnami/etcd:latest
+    environment:
+      ETCD_NAME: etcd01
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER: etcd01=http://etcd:2380
+      ETCD_AUTO_COMPACTION_RETENTION: "1"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "10000"
+      ALLOW_NONE_AUTHENTICATION: "yes"
+    volumes:
+      - etcd-data:/bitnami/etcd
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PgBouncer for connection pooling
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    environment:
+      DATABASES_HOST: postgres01
+      DATABASES_PORT: 5432
+      DATABASES_USER: postgres
+      DATABASES_PASSWORD: password
+      DATABASES_DB: ai_fusion_core
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 1000
+      PGBOUNCER_DEFAULT_POOL_SIZE: 25
+      PGBOUNCER_MAX_DB_CONNECTIONS: 50
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: 600
+      PGBOUNCER_SERVER_LIFETIME: 3600
+      PGBOUNCER_SERVER_LOGIN_RETRY: 3
+    ports:
+      - "6432:6432"
+    volumes:
+      - ./postgres/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - ./postgres/userlist.txt:/etc/pgbouncer/userlist.txt
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - postgres01
+      - postgres02
+      - postgres03
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cluster for caching and session management
+  redis01:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7001:6379"
+      - "17001:16379"
+    volumes:
+      - redis01-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis02:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7002:6379"
+      - "17002:16379"
+    volumes:
+      - redis02-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis03:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7003:6379"
+      - "17003:16379"
+    volumes:
+      - redis03-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis04:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7004:6379"
+      - "17004:16379"
+    volumes:
+      - redis04-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis05:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7005:6379"
+      - "17005:16379"
+    volumes:
+      - redis05-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis06:
+    image: redis:7-alpine
+    command: redis-server --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes --port 6379
+    ports:
+      - "7006:6379"
+      - "17006:16379"
+    volumes:
+      - redis06-data:/data
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--cluster", "check", "localhost:6379"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cluster Manager
+  redis-cluster-manager:
+    image: redis:7-alpine
+    networks:
+      - ai-fusion-network
+    restart: "no"  # Run once to set up cluster
+    volumes:
+      - ./redis/setup-cluster.sh:/setup-cluster.sh
+    command: sh /setup-cluster.sh
+    depends_on:
+      - redis01
+      - redis02
+      - redis03
+      - redis04
+      - redis05
+      - redis06
+
+  # Redis Load Balancer/Proxy (for simplified client access)
+  redis-cluster-proxy:
+    image: redis:7-alpine
+    command: redis-cli --cluster create redis01:6379 redis02:6379 redis03:6379 redis04:6379 redis05:6379 redis06:6379 --cluster-replicas 1 --cluster-yes
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    depends_on:
+      - redis01
+      - redis02
+      - redis03
+      - redis04
+      - redis05
+      - redis06
+      - redis-cluster-manager
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # MongoDB Cluster for document storage
+  mongodb01:
+    image: mongo:7-jammy
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27001:27017"
+    volumes:
+      - mongodb01-data:/data/db
+      - ./mongodb/mongodb01.conf:/etc/mongod.conf
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mongodb02:
+    image: mongo:7-jammy
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27002:27017"
+    volumes:
+      - mongodb02-data:/data/db
+      - ./mongodb/mongodb02.conf:/etc/mongod.conf
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  mongodb03:
+    image: mongo:7-jammy
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27003:27017"
+    volumes:
+      - mongodb03-data:/data/db
+      - ./mongodb/mongodb03.conf:/etc/mongod.conf
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MongoDB Router (mongos) for load balancing
+  mongodb-router:
+    image: mongo:7-jammy
+    command: mongos --configdb rs0/mongodb01:27017,mongodb02:27017,mongodb03:27017 --bind_ip_all --port 27017
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongodb/mongos.conf:/etc/mongos.conf
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - mongodb01
+      - mongodb02
+      - mongodb03
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # MongoDB Cluster Setup
+  mongodb-setup:
+    image: mongo:7-jammy
+    networks:
+      - ai-fusion-network
+    restart: "no"
+    volumes:
+      - ./mongodb/setup-replica-set.js:/setup-replica-set.js
+    command: >
+      sh -c "
+        sleep 15 &&
+        mongosh mongodb01:27017 /setup-replica-set.js
+      "
+    depends_on:
+      - mongodb01
+      - mongodb02
+      - mongodb03
+
+  # Vector Database (Qdrant for vector operations)
+  vector-db:
+    image: qdrant/qdrant:v1.7.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - vector-data:/qdrant/storage
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+
+  # Database Backup Service
+  db-backup:
+    image: alpine:latest
+    volumes:
+      - ./backups:/backups
+      - postgres01-data:/postgres01-data:ro
+      - postgres02-data:/postgres02-data:ro
+      - postgres03-data:/postgres03-data:ro
+      - redis01-data:/redis01-data:ro
+      - redis02-data:/redis02-data:ro
+      - redis03-data:/redis03-data:ro
+      - redis04-data:/redis04-data:ro
+      - redis05-data:/redis05-data:ro
+      - redis06-data:/redis06-data:ro
+      - mongodb01-data:/mongodb01-data:ro
+      - mongodb02-data:/mongodb02-data:ro
+      - mongodb03-data:/mongodb03-data:ro
+      - vector-data:/vector-data:ro
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres01
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ai_fusion_core
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      MONGODB_HOST: mongodb01
+      MONGODB_PORT: 27017
+      REDIS_HOST: redis01
+      REDIS_PORT: 6379
+    command: >
+      sh -c "
+        apk add --no-cache postgresql-client mongodb-tools redis &&
+        mkdir -p /backups/daily /backups/weekly /backups/monthly &&
+        echo 'Starting backup service...' &&
+        while true; do
+          DATE=\$$(date +%Y%m%d_%H%M%S)
+          DAY_OF_WEEK=\$$(date +%w)
+          DAY_OF_MONTH=\$$(date +%d)
+
+          # Daily backup at 2 AM
+          if [ \$$\$(date +%H) -eq 2 ]; then
+            echo 'Performing daily backup...'
+
+            # PostgreSQL backup
+            pg_dump -h \$\$POSTGRES_HOST -p \$\$POSTGRES_PORT -U \$\$POSTGRES_USER -d \$\$POSTGRES_DB -F c -f /backups/daily/postgres_backup_\$\$DATE.dump
+
+            # MongoDB backup
+            mongodump --host \$\$MONGODB_HOST --port \$\$MONGODB_PORT --out /backups/daily/mongodb_backup_\$\$DATE
+
+            # Redis backup
+            redis-cli -h \$\$REDIS_HOST -p \$\$REDIS_PORT SAVE
+            cp /redis01-data/dump.rdb /backups/daily/redis_backup_\$\$DATE.rdb
+
+            # Vector DB backup (Qdrant)
+            cp -r /vector-data /backups/daily/vector_backup_\$\$DATE
+
+            # Clean old daily backups (keep 7 days)
+            find /backups/daily -type f -mtime +7 -delete
+          fi
+
+          # Weekly backup on Sunday at 3 AM
+          if [ \$\$DAY_OF_WEEK -eq 0 ] && [ \$$\$(date +%H) -eq 3 ]; then
+            echo 'Performing weekly backup...'
+            cp -r /backups/daily/* /backups/weekly/
+            find /backups/weekly -type f -mtime +30 -delete
+          fi
+
+          # Monthly backup on 1st of month at 4 AM
+          if [ \$\$DAY_OF_MONTH -eq 1 ] && [ \$$\$(date +%H) -eq 4 ]; then
+            echo 'Performing monthly backup...'
+            cp -r /backups/daily/* /backups/monthly/
+            find /backups/monthly -type f -mtime +365 -delete
+          fi
+
+          sleep 3600
+        done
+      "
+
+  # PostgreSQL Exporter for Prometheus
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:password@postgres01:5432/ai_fusion_core?sslmode=disable"
+    ports:
+      - "9187:9187"
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - postgres01
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MongoDB Exporter for Prometheus
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.39
+    environment:
+      MONGODB_URI: "mongodb://mongodb01:27017"
+    ports:
+      - "9216:9216"
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - mongodb01
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9216/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Exporter for Prometheus
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis01:6379"
+      REDIS_PASSWORD: ""
+    ports:
+      - "9121:9121"
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    depends_on:
+      - redis01
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9121/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Alertmanager for database alerts
+  alertmanager:
+    image: prom/alertmanager:latest
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    networks:
+      - ai-fusion-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+
+volumes:
+ prometheus-data:
+ grafana-data:
+ # PostgreSQL cluster data volumes
+ postgres01-data:
+ postgres02-data:
+ postgres03-data:
+ etcd-data:
+ # Redis cluster data volumes
+ redis01-data:
+ redis02-data:
+ redis03-data:
+ redis04-data:
+ redis05-data:
+ redis06-data:
+ # MongoDB cluster data volumes
+ mongodb01-data:
+ mongodb02-data:
+ mongodb03-data:
+ mongodb-config-data:
+ # Legacy volumes (for backward compatibility)
+ postgres-data:
+ redis-data:
+ vector-data:
